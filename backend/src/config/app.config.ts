@@ -61,7 +61,9 @@ const raw = {
   jwtSecret:    env('JWT_SECRET',     'cantonix-dev-secret-change-in-production'),
   jwtExpiresIn: env('JWT_EXPIRES_IN', '7d'),
 
-  // Canton Participant Node (direct connection — future use)
+  // Canton Participant Node — JSON Ledger API (PROVIDER=canton)
+  // Set CANTON_API_URL to your Canton node's JSON API base URL
+  // e.g. http://localhost:7575  or  https://your-canton-node.example.com
   cantonApiUrl:   env('CANTON_API_URL',   ''),
   cantonApiToken: env('CANTON_API_TOKEN', ''),
 };

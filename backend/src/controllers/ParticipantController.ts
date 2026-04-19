@@ -1,14 +1,18 @@
 /**
  * ParticipantController.ts
  *
- * HTTP handlers for Canton Participant Node status.
+ * GET /api/participant/status → Participant Node + Ledger API health
  *
- * Routes:
- *   GET /api/participant/status  → Participant Node health + Ledger API health
+ * Returns structured status including:
+ *   - participant node connectivity
+ *   - ledger API availability
+ *   - latency measurements
+ *   - error details if offline
  */
 
 import { Request, Response } from 'express';
 import { cantonParticipantProvider } from '../providers/canton/CantonParticipantProvider';
+import { config } from '../config/app.config';
 
 export class ParticipantController {
 
@@ -23,6 +27,8 @@ export class ParticipantController {
       ]);
 
       res.json({
+        provider:    config.providerMode,
+        cantonApiUrl: config.cantonApiUrl || null,
         participant: participantStatus,
         ledger:      ledgerHealth,
       });

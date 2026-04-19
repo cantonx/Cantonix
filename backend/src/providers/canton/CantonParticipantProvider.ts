@@ -1,130 +1,138 @@
 /**
  * CantonParticipantProvider.ts
  *
- * Canton Participant Node integration — Party creation and node health.
+ * Real Canton Participant Node integration via JSON Ledger API.
  * Activate by setting PROVIDER=canton in .env.
  *
  * ═══════════════════════════════════════════════════════════════════════════
- * CANTON ARCHITECTURE REFERENCE
+ * CANTON JSON LEDGER API REFERENCE
+ * Ref: https://docs.digitalasset.com/json-api/3.4/index.html
  * ═══════════════════════════════════════════════════════════════════════════
  *
- * Party Creation (JSON Ledger API — port x975):
- *   POST /v2/parties
- *   Body: { "partyIdHint": "alice", "displayName": "Alice" }
- *   Response: { "partyDetails": { "party": "alice::1220...", ... } }
- *   Ref: https://docs.digitalasset.com/json-api/3.4/index.html
+ * Base URL: CANTON_API_URL (e.g. http://localhost:7575)
+ * Auth:     Authorization: Bearer <CANTON_API_TOKEN>
  *
- * Participant Node Health (Validator App — port x903):
- *   GET /api/validator/readyz
- *   Returns: { version, uptime, rewards }
+ * Endpoints used:
+ *   POST /v2/parties              → Create a new Canton Party
+ *   GET  /v2/parties              → List parties (health ping)
+ *   GET  /v2/version              → Ledger API version + health
  *
- * Synchronizer Connection (Validator App — port x903):
- *   GET /v0/admin/participant/global-domain-connection-config
- *   Returns synchronizer connection configuration.
- *
- * Ledger Health (JSON Ledger API — port x975):
- *   GET /v2/version
- *   Returns: { version, ... }
+ * Future endpoints (stubs prepared):
+ *   POST /v2/commands/submit-and-wait  → Submit Daml command
+ *   POST /v2/query                     → Query active contracts
+ *   GET  /v2/transactions              → Fetch transaction stream
  *
  * ═══════════════════════════════════════════════════════════════════════════
- * MOCK vs REAL
+ * PROVIDER SWITCHING
  * ═══════════════════════════════════════════════════════════════════════════
- *
- * When PROVIDER=mock:
- *   createParty() → returns a simulated "party-<uuid>" immediately
- *   getParticipantStatus() → returns simulated health data
- *   getLedgerHealth() → returns simulated latency
- *
- * When PROVIDER=canton:
- *   createParty() → calls POST /v2/parties on the JSON Ledger API
- *   getParticipantStatus() → calls GET /api/validator/readyz
- *   getLedgerHealth() → calls GET /v2/version
+ *   PROVIDER=mock   → all methods return simulated data instantly
+ *   PROVIDER=canton → all methods call real Canton JSON Ledger API
  */
 
-import axios, { AxiosError } from 'axios';
+import axios, { AxiosError, AxiosInstance } from 'axios';
 import { randomUUID } from 'crypto';
 import { config } from '../../config/app.config';
-import { authHeaders } from '../../services/AuthService';
 import { formatLastChecked } from '../../utils/time';
 
-// ─── Types ────────────────────────────────────────────────────────────────
+// ─── Result types ─────────────────────────────────────────────────────────
 
 export interface PartyCreationResult {
-  /** Assigned Canton Party ID — format: "<hint>::<fingerprint>" */
+  /** Canton Party ID — format: "<hint>::<fingerprint>" */
   partyId: string;
-  /** Display name registered on the participant */
   displayName: string;
-  /** The participant node that hosts this party */
   participantId: string;
-  /** Whether this was a real Canton assignment or a mock */
   isMock: boolean;
 }
 
 export interface ParticipantStatusResult {
-  /** Participant node identifier */
   participantId: string;
-  /** Connectivity to the Global Synchronizer */
   synchronizerConnected: boolean;
-  /** Synchronizer domain ID (if connected) */
   domainId: string | null;
-  /** Validator App version */
   version: string;
-  /** Node health status */
   status: 'healthy' | 'degraded' | 'offline';
-  /** Round-trip latency to the readyz endpoint */
   latencyMs: number | null;
+  error: string | null;
   lastChecked: string;
 }
 
 export interface LedgerHealthResult {
-  /** JSON Ledger API availability */
   available: boolean;
-  /** Round-trip latency to the JSON Ledger API */
   latencyMs: number | null;
-  /** Ledger API version */
   version: string | null;
+  error: string | null;
   lastChecked: string;
+}
+
+// ─── Canton JSON API response shapes ─────────────────────────────────────
+
+interface CantonPartyDetails {
+  party: string;
+  displayName?: string;
+  isLocal?: boolean;
+  participantId?: string;
+}
+
+interface CantonCreatePartyResponse {
+  partyDetails?: CantonPartyDetails;
+  // Some versions return directly
+  party?: string;
+  displayName?: string;
+}
+
+interface CantonVersionResponse {
+  version?: string;
+  ledgerId?: string;
 }
 
 // ─── Provider ─────────────────────────────────────────────────────────────
 
 export class CantonParticipantProvider {
+  private readonly http: AxiosInstance;
+
+  constructor() {
+    // Build axios instance with Canton API base URL and auth token
+    this.http = axios.create({
+      baseURL: config.cantonApiUrl || config.jsonApiUrls.appProvider,
+      timeout: 15_000,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(config.cantonApiToken
+          ? { Authorization: `Bearer ${config.cantonApiToken}` }
+          : {}),
+      },
+    });
+  }
+
+  // ─── Public API ──────────────────────────────────────────────────────────
 
   /**
    * Create a Canton Party for a newly approved user.
    *
-   * Real Canton (PROVIDER=canton):
-   *   POST /v2/parties  (JSON Ledger API, port x975)
-   *   Body: { partyIdHint: string, displayName: string }
-   *   Response: { partyDetails: { party: "alice::1220...", ... } }
+   * Canton JSON Ledger API:
+   *   POST /v2/parties
+   *   Body: { "identifierHint": string, "displayName": string }
+   *   Response: { "partyDetails": { "party": "hint::1220...", ... } }
    *
-   * Mock (PROVIDER=mock):
-   *   Returns a simulated party-<uuid> immediately.
-   *
-   * @param userId    - Internal user ID (used as display name fallback)
-   * @param partyHint - Suggested party identifier (lowercase alphanumeric)
+   * Ref: https://docs.digitalasset.com/json-api/3.4/index.html#tag/Parties/operation/allocateParty
    */
   async createParty(
     userId: string,
     partyHint?: string
   ): Promise<PartyCreationResult> {
-    const hint = (partyHint ?? `user-${userId.slice(0, 8)}`).toLowerCase().replace(/[^a-z0-9-]/g, '-');
+    const hint = this.sanitizeHint(partyHint ?? `user-${userId.slice(0, 8)}`);
 
     if (config.providerMode === 'mock') {
-      return this.mockCreateParty(userId, hint);
+      return this.mockCreateParty(hint);
     }
 
-    return this.realCreateParty(userId, hint);
+    return this.realCreateParty(hint);
   }
 
   /**
-   * Check the health of the primary Participant Node.
+   * Check Participant Node health.
    *
-   * Real Canton (PROVIDER=canton):
-   *   GET /api/validator/readyz  (Validator App, port x903)
-   *
-   * Mock (PROVIDER=mock):
-   *   Returns simulated healthy status.
+   * Uses GET /v2/parties as a lightweight ping.
+   * Falls back to GET /v2/version for version info.
    */
   async getParticipantStatus(): Promise<ParticipantStatusResult> {
     if (config.providerMode === 'mock') {
@@ -135,13 +143,11 @@ export class CantonParticipantProvider {
   }
 
   /**
-   * Check the health of the JSON Ledger API.
+   * Check JSON Ledger API health.
    *
-   * Real Canton (PROVIDER=canton):
-   *   GET /v2/version  (JSON Ledger API, port x975)
-   *
-   * Mock (PROVIDER=mock):
-   *   Returns simulated available status.
+   * Canton JSON Ledger API:
+   *   GET /v2/version
+   *   Response: { "version": "2.x.x", "ledgerId": "..." }
    */
   async getLedgerHealth(): Promise<LedgerHealthResult> {
     if (config.providerMode === 'mock') {
@@ -151,45 +157,99 @@ export class CantonParticipantProvider {
     return this.realLedgerHealth();
   }
 
+  // ─── Part 10: Future extension stubs ─────────────────────────────────────
+
+  /**
+   * Submit a Daml command and wait for completion.
+   *
+   * Canton JSON Ledger API:
+   *   POST /v2/commands/submit-and-wait
+   *   Ref: https://docs.digitalasset.com/json-api/3.4/index.html#tag/Commands
+   *
+   * @stub — implement when Daml contracts are ready
+   */
+  async submitCommand(_payload: Record<string, unknown>): Promise<unknown> {
+    if (config.providerMode === 'mock') {
+      return { status: 'mock', commandId: randomUUID() };
+    }
+
+    // ── FUTURE INTEGRATION POINT ──────────────────────────────────────────
+    // const response = await this.http.post('/v2/commands/submit-and-wait', payload);
+    // return response.data;
+    throw new Error('submitCommand: not yet implemented for canton mode');
+  }
+
+  /**
+   * Query active Daml contracts.
+   *
+   * Canton JSON Ledger API:
+   *   POST /v2/query
+   *   Body: { "templateIds": ["Module:Template"], "query": {} }
+   *   Ref: https://docs.digitalasset.com/json-api/3.4/index.html#tag/Query
+   *
+   * @stub — implement when Daml contracts are ready
+   */
+  async queryContracts(_templateIds: string[], _query?: Record<string, unknown>): Promise<unknown[]> {
+    if (config.providerMode === 'mock') {
+      return [];
+    }
+
+    // ── FUTURE INTEGRATION POINT ──────────────────────────────────────────
+    // const response = await this.http.post('/v2/query', {
+    //   templateIds,
+    //   query: query ?? {},
+    // });
+    // return response.data?.activeContracts ?? [];
+    throw new Error('queryContracts: not yet implemented for canton mode');
+  }
+
+  /**
+   * Fetch transaction history.
+   *
+   * Canton JSON Ledger API:
+   *   GET /v2/transactions
+   *   Ref: https://docs.digitalasset.com/json-api/3.4/index.html#tag/Transactions
+   *
+   * @stub — implement when transaction history is needed
+   */
+  async fetchTransactions(_partyId: string, _limit = 20): Promise<unknown[]> {
+    if (config.providerMode === 'mock') {
+      return [];
+    }
+
+    // ── FUTURE INTEGRATION POINT ──────────────────────────────────────────
+    // const response = await this.http.get('/v2/transactions', {
+    //   params: { parties: partyId, limit },
+    // });
+    // return response.data?.transactions ?? [];
+    throw new Error('fetchTransactions: not yet implemented for canton mode');
+  }
+
   // ─── Real Canton implementations ─────────────────────────────────────────
 
-  private async realCreateParty(
-    userId: string,
-    hint: string
-  ): Promise<PartyCreationResult> {
-    // ── INTEGRATION POINT: POST /v2/parties ──────────────────────────────
-    // JSON Ledger API — port x975 (App Provider participant)
-    // Ref: https://docs.digitalasset.com/json-api/3.4/index.html#tag/Parties/operation/createParty
-    //
-    // The operator (app-provider) creates the party on behalf of the new user.
-    // In production, use the participant that will host this user's party.
-    const headers = await authHeaders('app-provider');
-    const url = `${config.jsonApiUrls.appProvider}/v2/parties`;
+  private async realCreateParty(hint: string): Promise<PartyCreationResult> {
+    // POST /v2/parties
+    // Ref: https://docs.digitalasset.com/json-api/3.4/index.html#tag/Parties/operation/allocateParty
+    const response = await this.http.post<CantonCreatePartyResponse>('/v2/parties', {
+      identifierHint: hint,
+      displayName:    hint,
+    });
 
-    const response = await axios.post(
-      url,
-      {
-        partyIdHint: hint,
-        displayName: `Cantonix User ${hint}`,
-      },
-      {
-        headers: { 'Content-Type': 'application/json', ...headers },
-        timeout: 15_000,
-      }
-    );
-
-    // Response shape: { partyDetails: { party: "alice::1220...", displayName, isLocal, ... } }
-    const partyDetails = response.data?.partyDetails ?? response.data;
-    const partyId = partyDetails?.party ?? partyDetails?.partyId;
+    // Normalize response — different Canton versions use different shapes
+    const data = response.data;
+    const details = data.partyDetails;
+    const partyId = details?.party ?? data.party;
 
     if (!partyId) {
-      throw new Error('Canton did not return a party ID in the response');
+      throw new Error(
+        `Canton did not return a party ID. Response: ${JSON.stringify(data)}`
+      );
     }
 
     return {
       partyId,
-      displayName:   partyDetails.displayName ?? hint,
-      participantId: partyDetails.participantId ?? 'app-provider',
+      displayName:   details?.displayName ?? data.displayName ?? hint,
+      participantId: details?.participantId ?? 'canton-participant',
       isMock:        false,
     };
   }
@@ -199,43 +259,31 @@ export class CantonParticipantProvider {
     const startTime = Date.now();
 
     try {
-      const headers = await authHeaders('app-provider');
-
-      // ── INTEGRATION POINT: GET /api/validator/readyz ──────────────────
-      // Validator App health endpoint (port x903)
-      const response = await axios.get(
-        config.validatorUrls.appProvider,
-        { headers, timeout: 5_000 }
-      );
+      // Use GET /v2/parties as a lightweight connectivity ping
+      // This confirms the API is reachable and auth is valid
+      await this.http.get('/v2/parties', { timeout: 5_000 });
 
       const latencyMs = Date.now() - startTime;
-      const data = response.data ?? {};
 
-      // ── INTEGRATION POINT: GET /v0/admin/participant/global-domain-connection-config
-      // Check synchronizer connectivity (optional — uncomment when ready)
-      // const syncConnected = await this.checkSynchronizerConnection(headers);
+      // Also fetch version for additional info
+      let version = 'unknown';
+      try {
+        const versionRes = await this.http.get<CantonVersionResponse>('/v2/version', { timeout: 3_000 });
+        version = versionRes.data?.version ?? 'unknown';
+      } catch { /* version is optional */ }
 
       return {
-        participantId:        'app-provider',
-        synchronizerConnected: true, // replace with real check above
-        domainId:             data.domainId ?? null,
-        version:              data.version ?? 'unknown',
-        status:               'healthy',
+        participantId:        config.cantonApiUrl || 'canton-participant',
+        synchronizerConnected: true,
+        domainId:             null, // populated via Admin API in future
+        version,
+        status:               latencyMs < 2000 ? 'healthy' : 'degraded',
         latencyMs,
+        error:                null,
         lastChecked:          formatLastChecked(checkedAt),
       };
     } catch (err) {
-      const axiosErr = err as AxiosError;
-      const isTimeout = axiosErr.code === 'ECONNABORTED';
-      return {
-        participantId:        'app-provider',
-        synchronizerConnected: false,
-        domainId:             null,
-        version:              'N/A',
-        status:               isTimeout ? 'degraded' : 'offline',
-        latencyMs:            isTimeout ? 5000 : null,
-        lastChecked:          formatLastChecked(checkedAt),
-      };
+      return this.buildOfflineStatus(checkedAt, err);
     }
   }
 
@@ -244,71 +292,93 @@ export class CantonParticipantProvider {
     const startTime = Date.now();
 
     try {
-      const headers = await authHeaders('app-provider');
-
-      // ── INTEGRATION POINT: GET /v2/version ───────────────────────────
-      // JSON Ledger API version endpoint (port x975)
-      const response = await axios.get(
-        `${config.jsonApiUrls.appProvider}/v2/version`,
-        { headers, timeout: 5_000 }
-      );
+      // GET /v2/version
+      const response = await this.http.get<CantonVersionResponse>('/v2/version', {
+        timeout: 5_000,
+      });
 
       return {
         available:   true,
         latencyMs:   Date.now() - startTime,
         version:     response.data?.version ?? null,
+        error:       null,
         lastChecked: formatLastChecked(checkedAt),
       };
-    } catch {
+    } catch (err) {
+      const message = this.extractErrorMessage(err);
       return {
         available:   false,
         latencyMs:   null,
         version:     null,
+        error:       message,
         lastChecked: formatLastChecked(checkedAt),
       };
     }
   }
 
-  // ── INTEGRATION POINT: Synchronizer connection check ─────────────────
-  // Uncomment when ready to check real synchronizer connectivity.
-  //
-  // private async checkSynchronizerConnection(
-  //   headers: Record<string, string>
-  // ): Promise<boolean> {
-  //   try {
-  //     // GET /v0/admin/participant/global-domain-connection-config
-  //     // (Validator App management endpoint, port x903)
-  //     await axios.get(
-  //       `${config.validatorAppUrls.appProvider}/v0/admin/participant/global-domain-connection-config`,
-  //       { headers, timeout: 5_000 }
-  //     );
-  //     return true;
-  //   } catch {
-  //     return false;
-  //   }
-  // }
+  // ─── Error helpers ────────────────────────────────────────────────────────
 
-  // ─── Mock implementations ─────────────────────────────────────────────
+  private buildOfflineStatus(
+    checkedAt: Date,
+    err: unknown
+  ): ParticipantStatusResult {
+    const axiosErr = err as AxiosError;
+    const isTimeout  = axiosErr.code === 'ECONNABORTED' || axiosErr.code === 'ETIMEDOUT';
+    const isAuth     = axiosErr.response?.status === 401 || axiosErr.response?.status === 403;
+    const isNotFound = axiosErr.response?.status === 404;
 
-  private mockCreateParty(userId: string, hint: string): PartyCreationResult {
-    // Simulate Canton party ID format: "<hint>::<fingerprint>"
+    let status: ParticipantStatusResult['status'] = 'offline';
+    if (isTimeout || isAuth) status = 'degraded';
+
+    const message = isAuth
+      ? 'Authentication failed — check CANTON_API_TOKEN'
+      : isNotFound
+      ? 'Endpoint not found — check CANTON_API_URL'
+      : isTimeout
+      ? 'Connection timed out'
+      : this.extractErrorMessage(err);
+
+    return {
+      participantId:        config.cantonApiUrl || 'canton-participant',
+      synchronizerConnected: false,
+      domainId:             null,
+      version:              'N/A',
+      status,
+      latencyMs:            isTimeout ? 5000 : null,
+      error:                message,
+      lastChecked:          formatLastChecked(checkedAt),
+    };
+  }
+
+  private extractErrorMessage(err: unknown): string {
+    const axiosErr = err as AxiosError<{ error?: string; message?: string }>;
+    if (axiosErr.response?.data?.error)   return axiosErr.response.data.error;
+    if (axiosErr.response?.data?.message) return axiosErr.response.data.message;
+    if (axiosErr.message)                 return axiosErr.message;
+    return 'Unknown error';
+  }
+
+  // ─── Mock implementations ─────────────────────────────────────────────────
+
+  private mockCreateParty(hint: string): PartyCreationResult {
     const fingerprint = `1220${randomUUID().replace(/-/g, '').slice(0, 40)}`;
     return {
       partyId:       `${hint}::${fingerprint}`,
-      displayName:   `Cantonix User ${hint}`,
-      participantId: 'app-provider-mock',
+      displayName:   hint,
+      participantId: 'mock-participant',
       isMock:        true,
     };
   }
 
   private mockParticipantStatus(): ParticipantStatusResult {
     return {
-      participantId:        'app-provider-mock',
+      participantId:        'mock-participant',
       synchronizerConnected: true,
       domainId:             'global-domain-mock',
       version:              'v0.5.10-mock',
       status:               'healthy',
       latencyMs:            42,
+      error:                null,
       lastChecked:          formatLastChecked(new Date()),
     };
   }
@@ -318,8 +388,15 @@ export class CantonParticipantProvider {
       available:   true,
       latencyMs:   38,
       version:     'v2.0-mock',
+      error:       null,
       lastChecked: formatLastChecked(new Date()),
     };
+  }
+
+  // ─── Helpers ──────────────────────────────────────────────────────────────
+
+  private sanitizeHint(hint: string): string {
+    return hint.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 64);
   }
 }
 
