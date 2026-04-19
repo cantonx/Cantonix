@@ -9,6 +9,7 @@
  */
 
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { apiUrl } from '../lib/api';
 
 // ─── Types ────────────────────────────────────────────────────────────────
 
@@ -49,7 +50,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const storedToken = localStorage.getItem(TOKEN_KEY);
       const headers = new Headers(init.headers);
       if (storedToken) headers.set('Authorization', `Bearer ${storedToken}`);
-      return fetch(input, { ...init, headers });
+      // Resolve relative paths through apiUrl
+      const url = typeof input === 'string' && input.startsWith('/') ? apiUrl(input) : input;
+      return fetch(url, { ...init, headers });
     },
     []
   );
@@ -71,7 +74,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // ── signup ───────────────────────────────────────────────────────────────
   const signup = useCallback(async (email: string, password: string) => {
-    const res = await fetch('/api/auth/signup', {
+    const res = await fetch(apiUrl('/api/auth/signup'), {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ email, password }),
@@ -86,7 +89,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   // ── login ────────────────────────────────────────────────────────────────
   const login = useCallback(async (email: string, password: string) => {
-    const res = await fetch('/api/auth/login', {
+    const res = await fetch(apiUrl('/api/auth/login'), {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify({ email, password }),

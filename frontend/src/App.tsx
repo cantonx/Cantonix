@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Dashboard from './pages/Dashboard';
 import AuthPage from './pages/AuthPage';
+import logo from './assets/logo.png';
 import './styles/layout.css';
 
 /* ── Icons ───────────────────────────────────────────────────────────────── */
@@ -76,7 +77,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, onNavigate }) => {
     <aside className="sidebar">
       {/* Logo */}
       <div className="sidebar-logo">
-        <div className="sidebar-logo-title">Cantonix</div>
+        <img src={logo} alt="Cantonix" className="sidebar-logo-img" />
         <div className="sidebar-logo-sub">Validator Hub</div>
       </div>
 

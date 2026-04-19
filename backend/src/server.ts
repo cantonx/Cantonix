@@ -11,7 +11,24 @@ import meRoutes        from './routes/me';
 
 const app = express();
 
-app.use(cors());
+// Allow requests from Vercel frontend and localhost dev
+const allowedOrigins = [
+  /^https:\/\/.*\.vercel\.app$/,
+  /^http:\/\/localhost:\d+$/,
+  ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
+];
+
+app.use(cors({
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, Postman)
+    if (!origin) return callback(null, true);
+    const allowed = allowedOrigins.some((pattern) =>
+      typeof pattern === 'string' ? pattern === origin : pattern.test(origin)
+    );
+    callback(allowed ? null : new Error('Not allowed by CORS'), allowed);
+  },
+  credentials: true,
+}));
 app.use(express.json());
 
 // ─── Routes ───────────────────────────────────────────────────────────────

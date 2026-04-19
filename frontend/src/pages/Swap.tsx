@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useAuth } from '../context/AuthContext';
 
 interface SwapResult {
   transactionId?: string;
@@ -7,6 +8,7 @@ interface SwapResult {
 }
 
 const Swap: React.FC = () => {
+  const { authFetch } = useAuth();
   const [fromAmount, setFromAmount] = useState('');
   const [toAmount, setToAmount] = useState('');
   const [fromToken] = useState('CC');
@@ -47,7 +49,7 @@ const Swap: React.FC = () => {
     setResult(null);
 
     try {
-      const response = await fetch('/api/swap/execute', {
+      const response = await authFetch('/api/swap/execute', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
+import logo from '../assets/logo.png';
 
 type Mode = 'login' | 'signup';
 
@@ -36,7 +37,7 @@ const AuthPage: React.FC = () => {
       <div className="auth-card">
         {/* Logo */}
         <div className="auth-logo">
-          <div className="auth-logo-title">Cantonix</div>
+          <img src={logo} alt="Cantonix" className="auth-logo-img" />
           <div className="auth-logo-sub">Validator Hub</div>
         </div>
 
