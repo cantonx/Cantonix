@@ -60,6 +60,10 @@ const raw = {
   // JWT (multi-user auth)
   jwtSecret:    env('JWT_SECRET',     'cantonix-dev-secret-change-in-production'),
   jwtExpiresIn: env('JWT_EXPIRES_IN', '7d'),
+
+  // Canton Participant Node (direct connection — future use)
+  cantonApiUrl:   env('CANTON_API_URL',   ''),
+  cantonApiToken: env('CANTON_API_TOKEN', ''),
 };
 
 export const config = {

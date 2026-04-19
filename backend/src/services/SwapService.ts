@@ -30,7 +30,7 @@ export class SwapService {
     // Use user's partyId as wallet address if not explicitly provided
     const enriched: SwapRequest = {
       ...request,
-      walletAddress: request.walletAddress?.trim() || user.partyId,
+      walletAddress: request.walletAddress?.trim() || user.partyId || user.sub,
     };
 
     // Execute via provider (mock or real Canton wallet)

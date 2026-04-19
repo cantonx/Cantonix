@@ -3,7 +3,7 @@
  *
  * Handles signup, login, and profile endpoints.
  *
- * POST /api/auth/signup  → register new user + get JWT
+ * POST /api/auth/signup  → register new user (invitation required after first user)
  * POST /api/auth/login   → authenticate + get JWT
  * GET  /api/me           → return authenticated user profile
  */
@@ -14,7 +14,12 @@ import { signup, login, getUserById, AuthError } from '../services/UserAuthServi
 export class UserAuthController {
   // POST /api/auth/signup
   signup = async (req: Request, res: Response): Promise<void> => {
-    const { email, password } = req.body as { email?: string; password?: string };
+    const { email, password, invitationCode, partyIdHint } = req.body as {
+      email?: string;
+      password?: string;
+      invitationCode?: string;
+      partyIdHint?: string;
+    };
 
     if (!email || !password) {
       res.status(400).json({ error: 'email and password are required' });
@@ -22,10 +27,13 @@ export class UserAuthController {
     }
 
     try {
-      const result = await signup(email, password);
+      const result = await signup(email, password, invitationCode, partyIdHint);
       res.status(201).json({
-        user:  result.user,
-        token: result.token,
+        user:    result.user,
+        token:   result.token,
+        message: result.user.onboardingStatus === 'pending'
+          ? 'Registration successful. Awaiting sponsor approval to activate your Canton Party.'
+          : 'Registration successful. Your Canton Party is active.',
       });
     } catch (err) {
       if (err instanceof AuthError) {

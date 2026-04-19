@@ -1,12 +1,12 @@
-// ─── Prisma Schema — Cantonix Validator Hub ───────────────────────────────
+// ─── Prisma Schema — Cantonix Validator Hub v4.0 ─────────────────────────
 //
-// Canton alignment notes:
-//   User.partyId  → simulates a Canton Party ID ("party-<uuid>")
-//                   Future: replace with real party from POST /v2/parties
-//   Validator     → represents a Participant Node health snapshot
-//                   Scoped per user — strict multi-tenant isolation
-//   SwapTransaction → records CC transfer initiations
-//                   transactionId maps to Canton ledger updateId or tracking_id
+// Canton alignment:
+//   User.partyId        → null until Canton assigns a real Party ID
+//   User.onboardingStatus → pending | approved | rejected
+//   InvitationCode      → Canton-style onboarding authorization token
+//   OnboardingRequest   → tracks sponsor-based party creation flow
+//   Validator           → Participant Node health snapshot (per-user)
+//   SwapTransaction     → CC transfer record (maps to Canton ledger updateId)
 
 generator client {
   provider = "prisma-client-js"
@@ -17,6 +17,12 @@ datasource db {
 }
 
 // ─── Enums ────────────────────────────────────────────────────────────────
+
+enum OnboardingStatus {
+  pending   // User registered, awaiting sponsor approval
+  approved  // Sponsor approved — Canton Party created (or simulated)
+  rejected  // Sponsor rejected the request
+}
 
 enum ValidatorStatus {
   healthy
@@ -41,16 +47,94 @@ model User {
   id           String   @id @default(uuid())
   email        String   @unique
   passwordHash String
-  /// Simulated Canton Party ID — format: "party-<uuid>"
-  /// Future: real Canton party ID from JSON Ledger API
-  partyId      String   @unique
+
+  /// Canton Party ID — null until onboarding is approved and Canton assigns it.
+  /// Format (real Canton): "alice::1220<fingerprint>"
+  /// Format (mock):        "party-<uuid>"
+  partyId      String?  @unique
+
+  /// Canton-style onboarding lifecycle state
+  onboardingStatus OnboardingStatus @default(pending)
+
+  /// The user who sponsored this account (invited them)
+  /// null for the first admin/bootstrap user
+  sponsorId    String?
+
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  validators       Validator[]
-  swapTransactions SwapTransaction[]
+  // Relations
+  sponsor              User?              @relation("SponsorRelation", fields: [sponsorId], references: [id])
+  sponsoredUsers       User[]             @relation("SponsorRelation")
+  invitationCodesIssued InvitationCode[]  @relation("InvitationIssuer")
+  onboardingRequest    OnboardingRequest?
+  validators           Validator[]
+  swapTransactions     SwapTransaction[]
 
   @@map("users")
+}
+
+// ─── InvitationCode ───────────────────────────────────────────────────────
+// Canton concept: Onboarding Authorization
+// A sponsor (existing participant) issues a one-time code to authorize
+// a new party to join the network.
+
+model InvitationCode {
+  id        String   @id @default(uuid())
+  code      String   @unique  // The actual invitation token (e.g. "CANTON-XXXX-XXXX")
+  issuedById String           // The sponsor who created this code
+
+  /// Whether this code has been consumed by a signup
+  usedById  String?  @unique  // userId of the person who used it
+  usedAt    DateTime?
+
+  expiresAt DateTime?          // Optional expiry
+  createdAt DateTime @default(now())
+
+  // Relations
+  issuedBy  User     @relation("InvitationIssuer", fields: [issuedById], references: [id])
+
+  @@index([issuedById])
+  @@map("invitation_codes")
+}
+
+// ─── OnboardingRequest ────────────────────────────────────────────────────
+// Canton concept: Party Onboarding Flow
+// Tracks the full lifecycle: invited → registered → approved → party created
+
+model OnboardingRequest {
+  id     String @id @default(uuid())
+  userId String @unique  // The party candidate
+
+  /// The sponsor who must approve this request
+  sponsorId String
+
+  /// The invitation code used to initiate this request
+  invitationCodeId String
+
+  /// Current status in the onboarding lifecycle
+  status OnboardingStatus @default(pending)
+
+  /// Canton Party ID hint — suggested identifier for the new party
+  /// Format: lowercase alphanumeric, used as hint in POST /v2/parties
+  partyIdHint String?
+
+  /// Canton Party ID assigned after approval
+  /// Populated by CantonParticipantProvider.createParty() or mock
+  assignedPartyId String?
+
+  /// Notes from the sponsor (approval/rejection reason)
+  reviewNote String?
+
+  reviewedAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([sponsorId])
+  @@map("onboarding_requests")
 }
 
 // ─── Validator (Participant Node snapshot) ────────────────────────────────
@@ -74,12 +158,20 @@ model Validator {
   updatedAt   DateTime @updatedAt
 
   /// CC (Amulet) rewards — null when offline or unavailable
-  amuletRewards        Float?
+  amuletRewards         Float?
   synchronizerConnected Boolean @default(false)
+
+  /// Canton Participant Node ID (future: from Admin API)
+  participantId String?
+
+  /// Global Synchronizer domain ID this node is connected to
+  domainId String?
+
+  /// Synchronizer connectivity status (derived from participant health)
+  synchronizerStatus String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  // Fast per-user lookups — enforces multi-tenant isolation at DB level
   @@index([userId])
   @@map("validators")
 }

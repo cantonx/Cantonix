@@ -17,7 +17,6 @@ import { Request, Response, NextFunction } from 'express';
 import { verifyToken, AuthError } from '../services/UserAuthService';
 import type { JwtPayload } from '../models/user.model';
 
-// Extend Express Request to carry the authenticated user
 declare global {
   namespace Express {
     interface Request {

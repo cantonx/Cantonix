@@ -1,23 +1,24 @@
 /**
  * user.model.ts
  *
- * User identity model for the multi-tenant auth system.
+ * User identity model aligned with Canton Party semantics.
  *
  * ─── Canton Party mapping ─────────────────────────────────────────────────
  *
- * Each user is assigned a `partyId` at signup that simulates a Canton Party.
- * Format: "party-<uuid>"
+ * In Canton, a Party is a cryptographic identity hosted on a Participant Node.
+ * Format: "<hint>::<fingerprint>"  e.g. "alice::1220abc..."
  *
- * When real Canton nodes are connected (PROVIDER=canton), this partyId
- * will be replaced with the actual Canton party ID returned by:
- *   POST /v2/parties  (JSON Ledger API, port x975)
- *   → { "partyDetails": { "party": "Alice::1220..." } }
+ * Onboarding lifecycle:
+ *   1. User registers with an invitation code → partyId = null, status = pending
+ *   2. Sponsor approves → CantonParticipantProvider.createParty() is called
+ *   3. Canton assigns partyId → status = approved
  *
- * The migration path:
- *   1. Now:   partyId = "party-<uuid>"  (local simulation)
- *   2. Later: partyId = "Alice::1220..."  (real Canton party)
- *   3. The user.id → partyId mapping stays the same in both cases.
+ * Until approved, partyId is null. The JWT still works — partyId in the
+ * token will be null and protected endpoints that require a party will
+ * check onboardingStatus before proceeding.
  */
+
+export type OnboardingStatus = 'pending' | 'approved' | 'rejected';
 
 export interface User {
   id: string;
@@ -25,12 +26,19 @@ export interface User {
   passwordHash: string;
 
   /**
-   * Simulated Canton Party ID.
-   * Future: replace with real party ID from Canton JSON Ledger API.
+   * Canton Party ID — null until onboarding is approved.
+   * Real format: "alice::1220<fingerprint>"
+   * Mock format: "party-<uuid>"
    */
-  partyId: string;
+  partyId: string | null;
 
-  createdAt: string; // ISO 8601
+  /** Canton-style onboarding lifecycle state */
+  onboardingStatus: OnboardingStatus;
+
+  /** ID of the sponsor who invited this user */
+  sponsorId: string | null;
+
+  createdAt: string;
 }
 
 /**
@@ -39,7 +47,9 @@ export interface User {
 export interface PublicUser {
   id: string;
   email: string;
-  partyId: string;
+  partyId: string | null;
+  onboardingStatus: OnboardingStatus;
+  sponsorId: string | null;
   createdAt: string;
 }
 
@@ -48,9 +58,10 @@ export interface PublicUser {
  * Attached to req.user by the auth middleware.
  */
 export interface JwtPayload {
-  sub: string;   // user.id
+  sub: string;              // user.id
   email: string;
-  partyId: string;
+  partyId: string | null;   // null until Canton approves onboarding
+  onboardingStatus: OnboardingStatus;
   iat?: number;
   exp?: number;
 }
