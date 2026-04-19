@@ -1,12 +1,13 @@
-// ─── Prisma Schema — Cantonix Validator Hub v4.0 ─────────────────────────
+// ─── Prisma Schema — Cantonix Validator Hub v5.0 ─────────────────────────
 //
 // Canton alignment:
+//   User.role           → ADMIN | OPERATOR | USER
 //   User.partyId        → null until Canton assigns a real Party ID
 //   User.onboardingStatus → pending | approved | rejected
-//   InvitationCode      → Canton-style onboarding authorization token
-//   OnboardingRequest   → tracks sponsor-based party creation flow
+//   InvitationCode      → Operator-controlled onboarding authorization
+//   OnboardingRequest   → Tracks party creation lifecycle
 //   Validator           → Participant Node health snapshot (per-user)
-//   SwapTransaction     → CC transfer record (maps to Canton ledger updateId)
+//   SwapTransaction     → CC transfer record
 
 generator client {
   provider = "prisma-client-js"
@@ -18,10 +19,22 @@ datasource db {
 
 // ─── Enums ────────────────────────────────────────────────────────────────
 
+enum UserRole {
+  ADMIN
+  OPERATOR
+  USER
+}
+
 enum OnboardingStatus {
-  pending   // User registered, awaiting sponsor approval
-  approved  // Sponsor approved — Canton Party created (or simulated)
-  rejected  // Sponsor rejected the request
+  pending
+  approved
+  rejected
+}
+
+enum InvitationStatus {
+  active
+  expired
+  revoked
 }
 
 enum ValidatorStatus {
@@ -48,92 +61,78 @@ model User {
   email        String   @unique
   passwordHash String
 
-  /// Canton Party ID — null until onboarding is approved and Canton assigns it.
-  /// Format (real Canton): "alice::1220<fingerprint>"
-  /// Format (mock):        "party-<uuid>"
+  /// RBAC role — controls what actions this user can perform
+  role         UserRole @default(USER)
+
+  /// Canton Party ID — null until onboarding is approved
+  /// Real format: "alice::1220<fingerprint>"
+  /// Mock format: "party-<uuid>"
   partyId      String?  @unique
 
   /// Canton-style onboarding lifecycle state
   onboardingStatus OnboardingStatus @default(pending)
 
-  /// The user who sponsored this account (invited them)
-  /// null for the first admin/bootstrap user
-  sponsorId    String?
-
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
   // Relations
-  sponsor              User?              @relation("SponsorRelation", fields: [sponsorId], references: [id])
-  sponsoredUsers       User[]             @relation("SponsorRelation")
-  invitationCodesIssued InvitationCode[]  @relation("InvitationIssuer")
-  onboardingRequest    OnboardingRequest?
-  validators           Validator[]
-  swapTransactions     SwapTransaction[]
+  invitationCodesCreated InvitationCode[]
+  onboardingRequest      OnboardingRequest?
+  validators             Validator[]
+  swapTransactions       SwapTransaction[]
 
   @@map("users")
 }
 
 // ─── InvitationCode ───────────────────────────────────────────────────────
-// Canton concept: Onboarding Authorization
-// A sponsor (existing participant) issues a one-time code to authorize
-// a new party to join the network.
+// Canton concept: Operator-controlled Onboarding Authorization
+// Only ADMIN or OPERATOR can create invitation codes.
+// Users CANNOT invite other users.
 
 model InvitationCode {
-  id        String   @id @default(uuid())
-  code      String   @unique  // The actual invitation token (e.g. "CANTON-XXXX-XXXX")
-  issuedById String           // The sponsor who created this code
+  id            String           @id @default(uuid())
+  code          String           @unique
+  createdByUserId String
 
-  /// Whether this code has been consumed by a signup
-  usedById  String?  @unique  // userId of the person who used it
-  usedAt    DateTime?
+  /// Maximum number of times this code can be used
+  maxUses       Int              @default(1)
+  /// How many times this code has been used
+  usedCount     Int              @default(0)
 
-  expiresAt DateTime?          // Optional expiry
-  createdAt DateTime @default(now())
+  status        InvitationStatus @default(active)
+  expiresAt     DateTime?
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
 
   // Relations
-  issuedBy  User     @relation("InvitationIssuer", fields: [issuedById], references: [id])
+  createdBy     User             @relation(fields: [createdByUserId], references: [id])
+  usages        OnboardingRequest[]
 
-  @@index([issuedById])
+  @@index([createdByUserId])
   @@map("invitation_codes")
 }
 
 // ─── OnboardingRequest ────────────────────────────────────────────────────
-// Canton concept: Party Onboarding Flow
-// Tracks the full lifecycle: invited → registered → approved → party created
 
 model OnboardingRequest {
-  id     String @id @default(uuid())
-  userId String @unique  // The party candidate
-
-  /// The sponsor who must approve this request
-  sponsorId String
-
-  /// The invitation code used to initiate this request
+  id               String           @id @default(uuid())
+  userId           String           @unique
   invitationCodeId String
 
-  /// Current status in the onboarding lifecycle
-  status OnboardingStatus @default(pending)
-
-  /// Canton Party ID hint — suggested identifier for the new party
-  /// Format: lowercase alphanumeric, used as hint in POST /v2/parties
-  partyIdHint String?
-
-  /// Canton Party ID assigned after approval
-  /// Populated by CantonParticipantProvider.createParty() or mock
-  assignedPartyId String?
-
-  /// Notes from the sponsor (approval/rejection reason)
-  reviewNote String?
-
-  reviewedAt DateTime?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  status           OnboardingStatus @default(pending)
+  partyIdHint      String?
+  assignedPartyId  String?
+  reviewNote       String?
+  reviewedById     String?
+  reviewedAt       DateTime?
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
 
   // Relations
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invitationCode   InvitationCode   @relation(fields: [invitationCodeId], references: [id])
 
-  @@index([sponsorId])
+  @@index([status])
   @@map("onboarding_requests")
 }
 
@@ -143,32 +142,21 @@ model Validator {
   id     String @id @default(uuid())
   userId String
 
-  /// Display name, e.g. "App User Participant"
   name   String
-  /// Canton role: validator | super_validator
   role   ValidatorRole @default(validator)
 
   status  ValidatorStatus @default(offline)
   version String          @default("unknown")
   uptime  String          @default("0%")
-  /// Round-trip latency string, e.g. "120ms" — null when offline
   latency String?
 
-  lastChecked DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  /// CC (Amulet) rewards — null when offline or unavailable
+  lastChecked           DateTime @default(now())
+  updatedAt             DateTime @updatedAt
   amuletRewards         Float?
-  synchronizerConnected Boolean @default(false)
-
-  /// Canton Participant Node ID (future: from Admin API)
-  participantId String?
-
-  /// Global Synchronizer domain ID this node is connected to
-  domainId String?
-
-  /// Synchronizer connectivity status (derived from participant health)
-  synchronizerStatus String?
+  synchronizerConnected Boolean  @default(false)
+  participantId         String?
+  domainId              String?
+  synchronizerStatus    String?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -179,23 +167,17 @@ model Validator {
 // ─── SwapTransaction ──────────────────────────────────────────────────────
 
 model SwapTransaction {
-  id     String @id @default(uuid())
-  userId String
-
-  /// Canton ledger updateId or transfer offer tracking_id
+  id            String     @id @default(uuid())
+  userId        String
   transactionId String
   status        SwapStatus @default(pending_approval)
-
-  fromToken  String
-  toToken    String
-  fromAmount Float
-  toAmount   Float
-
-  /// Canton party ID or wallet address used as sender
+  fromToken     String
+  toToken       String
+  fromAmount    Float
+  toAmount      Float
   walletAddress String
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

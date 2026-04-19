@@ -8,9 +8,11 @@
  *   router.get('/protected', authenticate, controller.handler);
  *
  * After this middleware runs, req.user is guaranteed to be set:
- *   req.user.sub     → user ID
- *   req.user.email   → user email
- *   req.user.partyId → Canton Party ID (simulated or real)
+ *   req.user.sub              → user ID
+ *   req.user.email            → user email
+ *   req.user.role             → ADMIN | OPERATOR | USER
+ *   req.user.partyId          → Canton Party ID (null until approved)
+ *   req.user.onboardingStatus → pending | approved | rejected
  */
 
 import { Request, Response, NextFunction } from 'express';

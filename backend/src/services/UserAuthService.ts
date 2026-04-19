@@ -1,20 +1,12 @@
 /**
  * UserAuthService.ts
  *
- * User signup, login, and JWT issuance — backed by PostgreSQL via Prisma.
+ * User signup, login, JWT — Canton RBAC aligned.
  *
- * ─── Canton Onboarding Integration ───────────────────────────────────────
- *
- * Signup flow (Canton-aligned):
- *   1. Validate invitation code → get sponsorId
- *   2. Create user with partyId=null, onboardingStatus=pending
- *   3. Consume invitation code
- *   4. Create OnboardingRequest for sponsor approval
- *   5. Return JWT (user can login but partyId is null until approved)
- *
- * Bootstrap mode (first user / no invitation required):
- *   If no users exist in the DB, the first signup is auto-approved
- *   with a mock partyId. This allows initial setup without a sponsor.
+ * Signup rules:
+ *   - Invitation code ALWAYS required (no open signup)
+ *   - Exception: if zero users exist → first user becomes ADMIN (bootstrap)
+ *   - New users always get role=USER, status=pending, partyId=null
  */
 
 import bcrypt from 'bcryptjs';
@@ -22,97 +14,61 @@ import jwt from 'jsonwebtoken';
 import { randomUUID } from 'crypto';
 import { config } from '../config/app.config';
 import { prisma } from '../lib/prisma';
-import type { PublicUser, JwtPayload } from '../models/user.model';
-import {
-  validateInvitationCode,
-  consumeInvitationCode,
-  createOnboardingRequest,
-  OnboardingError,
-} from './OnboardingService';
+import type { PublicUser, JwtPayload, UserRole } from '../models/user.model';
+import { validateInvitationCode, InvitationError } from './InvitationService';
+import { createOnboardingRequest } from './OnboardingService';
 import { cantonParticipantProvider } from '../providers/canton/CantonParticipantProvider';
 
-// ─── Errors ───────────────────────────────────────────────────────────────
-
 export class AuthError extends Error {
-  constructor(
-    message: string,
-    public readonly statusCode: number = 400
-  ) {
+  constructor(message: string, public readonly statusCode = 400) {
     super(message);
     this.name = 'AuthError';
   }
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────
-
 const BCRYPT_ROUNDS = 10;
 
-function toPublicUser(user: {
-  id: string;
-  email: string;
-  partyId: string | null;
-  onboardingStatus: string;
-  sponsorId: string | null;
-  createdAt: Date;
+function toPublicUser(u: {
+  id: string; email: string; role: string;
+  partyId: string | null; onboardingStatus: string; createdAt: Date;
 }): PublicUser {
   return {
-    id:               user.id,
-    email:            user.email,
-    partyId:          user.partyId,
-    onboardingStatus: user.onboardingStatus as PublicUser['onboardingStatus'],
-    sponsorId:        user.sponsorId,
-    createdAt:        user.createdAt.toISOString(),
+    id:               u.id,
+    email:            u.email,
+    role:             u.role as UserRole,
+    partyId:          u.partyId,
+    onboardingStatus: u.onboardingStatus as PublicUser['onboardingStatus'],
+    createdAt:        u.createdAt.toISOString(),
   };
 }
 
-function signToken(user: {
-  id: string;
-  email: string;
-  partyId: string | null;
-  onboardingStatus: string;
+function signToken(u: {
+  id: string; email: string; role: string;
+  partyId: string | null; onboardingStatus: string;
 }): string {
   const payload: JwtPayload = {
-    sub:              user.id,
-    email:            user.email,
-    partyId:          user.partyId,
-    onboardingStatus: user.onboardingStatus as JwtPayload['onboardingStatus'],
+    sub:              u.id,
+    email:            u.email,
+    role:             u.role as UserRole,
+    partyId:          u.partyId,
+    onboardingStatus: u.onboardingStatus as JwtPayload['onboardingStatus'],
   };
   return jwt.sign(payload, config.jwtSecret, {
     expiresIn: config.jwtExpiresIn as jwt.SignOptions['expiresIn'],
   });
 }
 
-// ─── Validation ───────────────────────────────────────────────────────────
-
 function validateEmail(email: string): void {
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-    throw new AuthError('Invalid email address');
-  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new AuthError('Invalid email address');
 }
 
 function validatePassword(password: string): void {
-  if (!password || password.length < 8) {
-    throw new AuthError('Password must be at least 8 characters');
-  }
+  if (!password || password.length < 8) throw new AuthError('Password must be at least 8 characters');
 }
 
-// ─── Public API ───────────────────────────────────────────────────────────
-
-export interface SignupResult { user: PublicUser; token: string }
+export interface SignupResult { user: PublicUser; token: string; message: string }
 export interface LoginResult  { user: PublicUser; token: string }
 
-/**
- * Register a new user.
- *
- * If invitationCode is provided:
- *   → Canton-style onboarding: user starts as pending, needs sponsor approval
- *
- * If no invitationCode and no users exist (bootstrap):
- *   → First user is auto-approved with a mock partyId
- *
- * If no invitationCode and users already exist:
- *   → Rejected (invitation required)
- */
 export async function signup(
   email: string,
   password: string,
@@ -123,14 +79,13 @@ export async function signup(
   validatePassword(password);
 
   const normalised = email.toLowerCase().trim();
-
   const existing = await prisma.user.findUnique({ where: { email: normalised } });
   if (existing) throw new AuthError('Email already registered', 409);
 
   const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
   const userId = randomUUID();
 
-  // ── Bootstrap mode: first user gets auto-approved ────────────────────
+  // ── Bootstrap: first user becomes ADMIN, auto-approved ───────────────
   const userCount = await prisma.user.count();
   if (userCount === 0) {
     const partyResult = await cantonParticipantProvider.createParty(userId, partyIdHint);
@@ -139,52 +94,49 @@ export async function signup(
         id:               userId,
         email:            normalised,
         passwordHash,
+        role:             'ADMIN',
         partyId:          partyResult.partyId,
         onboardingStatus: 'approved',
-        sponsorId:        null,
       },
     });
-    return { user: toPublicUser(user), token: signToken(user) };
+    return {
+      user:    toPublicUser(user),
+      token:   signToken(user),
+      message: 'Admin account created. You have full access.',
+    };
   }
 
-  // ── Invitation required for all subsequent users ──────────────────────
+  // ── All other signups require invitation code ─────────────────────────
   if (!invitationCode) {
     throw new AuthError('An invitation code is required to register', 403);
   }
 
   let invitationId: string;
-  let sponsorId: string;
-
   try {
-    const result = await validateInvitationCode(invitationCode);
-    invitationId = result.invitationId;
-    sponsorId    = result.sponsorId;
+    invitationId = await validateInvitationCode(invitationCode);
   } catch (err) {
-    if (err instanceof OnboardingError) {
-      throw new AuthError(err.message, err.statusCode);
-    }
+    if (err instanceof InvitationError) throw new AuthError(err.message, err.statusCode);
     throw err;
   }
 
-  // Create user with pending status — partyId assigned after sponsor approval
   const user = await prisma.user.create({
     data: {
       id:               userId,
       email:            normalised,
       passwordHash,
+      role:             'USER',
       partyId:          null,
       onboardingStatus: 'pending',
-      sponsorId,
     },
   });
 
-  // Consume the invitation code
-  await consumeInvitationCode(invitationId, userId);
+  await createOnboardingRequest(userId, invitationId, partyIdHint);
 
-  // Create onboarding request for sponsor to review
-  await createOnboardingRequest(userId, sponsorId, invitationId, partyIdHint);
-
-  return { user: toPublicUser(user), token: signToken(user) };
+  return {
+    user:    toPublicUser(user),
+    token:   signToken(user),
+    message: 'Registration successful. Awaiting operator approval to activate your Canton Party.',
+  };
 }
 
 export async function login(email: string, password: string): Promise<LoginResult> {
@@ -217,14 +169,4 @@ export function verifyToken(token: string): JwtPayload {
 export async function getUserById(id: string): Promise<PublicUser | null> {
   const user = await prisma.user.findUnique({ where: { id } });
   return user ? toPublicUser(user) : null;
-}
-
-/**
- * Refresh the JWT token with the latest user data from DB.
- * Call this after onboarding approval to get updated partyId.
- */
-export async function refreshToken(userId: string): Promise<string | null> {
-  const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user) return null;
-  return signToken(user);
 }

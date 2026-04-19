@@ -16,9 +16,10 @@ import { apiUrl } from '../lib/api';
 export interface AuthUser {
   id: string;
   email: string;
+  role: 'ADMIN' | 'OPERATOR' | 'USER';
   partyId: string | null;
   onboardingStatus: 'pending' | 'approved' | 'rejected';
-  sponsorId: string | null;
+  sponsorId?: string | null;
   createdAt: string;
 }
 
@@ -29,7 +30,6 @@ interface AuthContextValue {
   login: (email: string, password: string) => Promise<void>;
   signup: (email: string, password: string, invitationCode?: string) => Promise<{ message?: string }>;
   logout: () => void;
-  /** fetch() wrapper that automatically adds Authorization header */
   authFetch: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
 }
 

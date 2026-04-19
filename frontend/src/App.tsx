@@ -61,9 +61,12 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, onNavigate }) => {
   const network = (import.meta.env.VITE_NETWORK || 'DevNet');
   const networkLabel = network.charAt(0).toUpperCase() + network.slice(1).toLowerCase();
 
+  const isOperator = user?.role === 'ADMIN' || user?.role === 'OPERATOR';
+  const showOnboarding = isOperator || user?.onboardingStatus === 'pending';
+
   const navItems: { id: NavPage; label: string; icon: React.ReactNode }[] = [
     { id: 'dashboard',  label: 'Dashboard',    icon: <IconDashboard /> },
-    { id: 'onboarding', label: 'Onboarding',   icon: <IconOnboard /> },
+    ...(showOnboarding ? [{ id: 'onboarding' as NavPage, label: isOperator ? 'Onboarding' : 'My Status', icon: <IconOnboard /> }] : []),
     { id: 'swap',       label: 'CC Swap',      icon: <IconSwap /> },
     { id: 'network',    label: 'Network Info', icon: <IconNetwork /> },
     { id: 'history',    label: 'History',      icon: <IconHistory /> },
@@ -71,7 +74,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, onNavigate }) => {
 
   const initials = user?.email?.slice(0, 2).toUpperCase() ?? '??';
   const shortParty = user?.partyId
-    ? user.partyId.replace('party-', 'p-').slice(0, 14) + '…'
+    ? user.partyId.slice(0, 16) + '…'
     : user?.onboardingStatus === 'pending' ? 'pending approval…'
     : user?.onboardingStatus === 'rejected' ? 'rejected'
     : 'no party assigned';

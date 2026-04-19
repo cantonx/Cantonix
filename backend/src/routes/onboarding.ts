@@ -1,27 +1,23 @@
 /**
  * onboarding.ts — routes
  *
- * Canton-style sponsor-based party onboarding endpoints.
- * All routes require authentication.
- *
- * POST /api/onboarding/invite   → sponsor issues invitation code
- * POST /api/onboarding/approve  → sponsor approves onboarding request
- * POST /api/onboarding/reject   → sponsor rejects onboarding request
- * GET  /api/onboarding/status   → user checks their onboarding status
- * GET  /api/onboarding/pending  → sponsor lists pending requests
+ * POST /api/onboarding/approve  → ADMIN/OPERATOR only
+ * POST /api/onboarding/reject   → ADMIN/OPERATOR only
+ * GET  /api/onboarding/pending  → ADMIN/OPERATOR only
+ * GET  /api/onboarding/status   → any authenticated user (own status)
  */
 
 import { Router } from 'express';
 import { OnboardingController } from '../controllers/OnboardingController';
 import { authenticate } from '../middleware/authenticate';
+import { requireRole } from '../middleware/requireRole';
 
 const controller = new OnboardingController();
 const router     = Router();
 
-router.post('/invite',  authenticate, controller.invite);
-router.post('/approve', authenticate, controller.approve);
-router.post('/reject',  authenticate, controller.reject);
-router.get('/status',   authenticate, controller.status);
-router.get('/pending',  authenticate, controller.pending);
+router.post('/approve', authenticate, requireRole(['ADMIN', 'OPERATOR']), controller.approve);
+router.post('/reject',  authenticate, requireRole(['ADMIN', 'OPERATOR']), controller.reject);
+router.get('/pending',  authenticate, requireRole(['ADMIN', 'OPERATOR']), controller.pending);
+router.get('/status',   authenticate,                                      controller.status);
 
 export default router;

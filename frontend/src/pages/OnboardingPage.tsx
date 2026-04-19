@@ -1,63 +1,63 @@
 /**
  * OnboardingPage.tsx
  *
- * Canton-style sponsor-based party onboarding UI.
+ * Canton-style operator-controlled onboarding UI.
  *
- * Sections:
- *   1. My Status       — current user's onboarding status + partyId
- *   2. Invite          — issue invitation code (approved users only)
- *   3. Pending Requests — list + approve/reject (sponsor only)
+ * ADMIN/OPERATOR:
+ *   - Create invitation codes
+ *   - View & approve/reject pending requests
+ *
+ * USER:
+ *   - View own onboarding status only
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
 
-// ─── Types ────────────────────────────────────────────────────────────────
-
 interface OnboardingStatus {
   requestId: string | null;
   status: 'pending' | 'approved' | 'rejected';
   partyId: string | null;
-  sponsorId: string | null;
-  createdAt: string | null;
-  reviewedAt: string | null;
   reviewNote: string | null;
+  reviewedAt: string | null;
+  createdAt: string | null;
 }
 
 interface PendingRequest {
   id: string;
   userId: string;
-  sponsorId: string;
   status: string;
   partyIdHint: string | null;
   createdAt: string;
-  user: { email: string; createdAt: string };
+  user: { email: string; role: string };
 }
 
 interface InviteResult {
+  id: string;
   code: string;
+  maxUses: number;
+  usedCount: number;
+  status: string;
   expiresAt: string | null;
-  issuedBy: string;
+  createdAt: string;
 }
-
-// ─── Component ────────────────────────────────────────────────────────────
 
 const OnboardingPage: React.FC = () => {
   const { user, authFetch } = useAuth();
 
-  const [myStatus, setMyStatus]         = useState<OnboardingStatus | null>(null);
-  const [pending, setPending]           = useState<PendingRequest[]>([]);
-  const [inviteResult, setInviteResult] = useState<InviteResult | null>(null);
+  const isOperator = user?.role === 'ADMIN' || user?.role === 'OPERATOR';
+
+  const [myStatus, setMyStatus]           = useState<OnboardingStatus | null>(null);
+  const [pending, setPending]             = useState<PendingRequest[]>([]);
+  const [inviteResult, setInviteResult]   = useState<InviteResult | null>(null);
   const [loadingStatus, setLoadingStatus] = useState(true);
   const [loadingPending, setLoadingPending] = useState(false);
-  const [loadingInvite, setLoadingInvite]   = useState(false);
-  const [actionLoading, setActionLoading]   = useState<string | null>(null);
-  const [error, setError]               = useState('');
-  const [successMsg, setSuccessMsg]     = useState('');
+  const [loadingInvite, setLoadingInvite] = useState(false);
+  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [error, setError]                 = useState('');
+  const [successMsg, setSuccessMsg]       = useState('');
 
-  const isApproved = user?.onboardingStatus === 'approved';
-
-  // ── Fetch my onboarding status ──────────────────────────────────────────
+  // ── Fetch own status ────────────────────────────────────────────────────
   const fetchMyStatus = useCallback(async () => {
     setLoadingStatus(true);
     try {
@@ -67,35 +67,35 @@ const OnboardingPage: React.FC = () => {
     setLoadingStatus(false);
   }, [authFetch]);
 
-  // ── Fetch pending requests (sponsor) ───────────────────────────────────
+  // ── Fetch pending requests (ADMIN/OPERATOR only) ────────────────────────
   const fetchPending = useCallback(async () => {
-    if (!isApproved) return;
+    if (!isOperator) return;
     setLoadingPending(true);
     try {
       const res = await authFetch('/api/onboarding/pending');
       if (res.ok) setPending(await res.json());
     } catch { /* ignore */ }
     setLoadingPending(false);
-  }, [authFetch, isApproved]);
+  }, [authFetch, isOperator]);
 
   useEffect(() => {
     fetchMyStatus();
     fetchPending();
   }, [fetchMyStatus, fetchPending]);
 
-  // ── Issue invitation ────────────────────────────────────────────────────
-  const handleInvite = async () => {
+  // ── Create invitation code ──────────────────────────────────────────────
+  const handleCreateInvite = async () => {
     setLoadingInvite(true);
     setError('');
     setInviteResult(null);
     try {
-      const res = await authFetch('/api/onboarding/invite', {
+      const res = await authFetch('/api/invitations/create', {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ expiresInHours: 48 }),
+        body:    JSON.stringify({ maxUses: 1, expiresInHours: 48 }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? 'Failed to generate invitation');
+      if (!res.ok) throw new Error(data.error ?? 'Failed to create invitation');
       setInviteResult(data);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed');
@@ -103,7 +103,7 @@ const OnboardingPage: React.FC = () => {
     setLoadingInvite(false);
   };
 
-  // ── Approve / Reject ────────────────────────────────────────────────────
+  // ── Approve ─────────────────────────────────────────────────────────────
   const handleApprove = async (requestId: string) => {
     setActionLoading(requestId);
     setError('');
@@ -116,7 +116,7 @@ const OnboardingPage: React.FC = () => {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? 'Approval failed');
-      setSuccessMsg(`Approved! Canton Party assigned: ${data.partyId}`);
+      setSuccessMsg(`Approved! Canton Party: ${data.partyId}`);
       fetchPending();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed');
@@ -124,8 +124,9 @@ const OnboardingPage: React.FC = () => {
     setActionLoading(null);
   };
 
+  // ── Reject ──────────────────────────────────────────────────────────────
   const handleReject = async (requestId: string) => {
-    setActionLoading(requestId + '-reject');
+    setActionLoading(requestId + '-r');
     setError('');
     try {
       const res = await authFetch('/api/onboarding/reject', {
@@ -143,14 +144,17 @@ const OnboardingPage: React.FC = () => {
     setActionLoading(null);
   };
 
-  // ── Copy to clipboard ───────────────────────────────────────────────────
   const copyCode = (code: string) => {
     navigator.clipboard.writeText(code);
-    setSuccessMsg('Invitation code copied to clipboard!');
+    setSuccessMsg('Copied to clipboard!');
     setTimeout(() => setSuccessMsg(''), 3000);
   };
 
-  // ─── Render ──────────────────────────────────────────────────────────────
+  const statusColor = (s: string) => {
+    if (s === 'approved') return 'var(--color-success-text)';
+    if (s === 'rejected') return 'var(--color-danger-text)';
+    return 'var(--color-text-secondary)';
+  };
 
   return (
     <>
@@ -158,6 +162,11 @@ const OnboardingPage: React.FC = () => {
         <div className="main-header-left">
           <span className="main-header-title">Onboarding</span>
           <span className="network-badge">Canton Party Management</span>
+        </div>
+        <div className="main-header-right">
+          <span style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+            Role: <strong>{user?.role}</strong>
+          </span>
         </div>
       </div>
 
@@ -170,26 +179,31 @@ const OnboardingPage: React.FC = () => {
           <div className="alert success"><div className="alert-title">{successMsg}</div></div>
         )}
 
-        {/* ── Section 1: My Status ─────────────────────────────────────── */}
+        {/* ── My Canton Party Status ───────────────────────────────────── */}
         <div>
-          <div className="section-label">My Canton Party Status</div>
+          <div className="section-label">My Canton Party</div>
           <div className="card">
             <div className="card-body">
               {loadingStatus ? (
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <span className="spinner" /> Loading…
-                </div>
+                <div style={{ display: 'flex', gap: 8 }}><span className="spinner" /> Loading…</div>
               ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.625rem' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>Status</span>
-                    <span className={`status-pill ${user?.onboardingStatus ?? 'unknown'}`}>
-                      {user?.onboardingStatus ?? 'unknown'}
+                    <span className={`status-pill ${user?.onboardingStatus}`}>
+                      {user?.onboardingStatus}
                     </span>
                   </div>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>Canton Party ID</span>
-                    <span style={{ fontSize: 12, fontFamily: 'var(--font-mono)', color: 'var(--color-text-primary)', maxWidth: '60%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>Role</span>
+                    <span style={{ fontSize: 12, fontWeight: 500 }}>{user?.role}</span>
+                  </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                    <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>Party ID</span>
+                    <span style={{
+                      fontSize: 11, fontFamily: 'var(--font-mono)',
+                      maxWidth: '60%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }}>
                       {user?.partyId ?? '— pending assignment —'}
                     </span>
                   </div>
@@ -199,30 +213,34 @@ const OnboardingPage: React.FC = () => {
                       <span style={{ fontSize: 12 }}>{myStatus.reviewNote}</span>
                     </div>
                   )}
-                  {myStatus?.reviewedAt && (
-                    <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                      <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>Reviewed</span>
-                      <span style={{ fontSize: 12 }}>{new Date(myStatus.reviewedAt).toLocaleString()}</span>
-                    </div>
-                  )}
                 </div>
               )}
             </div>
           </div>
         </div>
 
-        {/* ── Section 2: Issue Invitation (approved users only) ─────────── */}
-        {isApproved && (
+        {/* ── USER: pending message ────────────────────────────────────── */}
+        {!isOperator && user?.onboardingStatus === 'pending' && (
+          <div className="alert info">
+            <div className="alert-title">Awaiting Operator Approval</div>
+            <div style={{ fontSize: 12, marginTop: 4 }}>
+              An ADMIN or OPERATOR needs to approve your onboarding request before your Canton Party is created.
+            </div>
+          </div>
+        )}
+
+        {/* ── OPERATOR: Create Invitation Code ────────────────────────── */}
+        {isOperator && (
           <div>
-            <div className="section-label">Issue Invitation Code</div>
+            <div className="section-label">Create Invitation Code</div>
             <div className="card">
               <div className="card-header">
-                <span className="card-title">Invite a new participant</span>
+                <span className="card-title">Issue onboarding authorization</span>
               </div>
               <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                 <p style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>
-                  Generate a one-time invitation code. Share it with the person you want to onboard.
-                  The code expires in 48 hours.
+                  Generate a one-time code. Share it with the person you want to onboard.
+                  Expires in 48 hours.
                 </p>
 
                 {inviteResult ? (
@@ -242,17 +260,10 @@ const OnboardingPage: React.FC = () => {
                       {inviteResult.code}
                     </div>
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
-                      <button
-                        className="btn btn-primary btn-sm"
-                        style={{ flex: 1 }}
-                        onClick={() => copyCode(inviteResult.code)}
-                      >
+                      <button className="btn btn-primary btn-sm" style={{ flex: 1 }} onClick={() => copyCode(inviteResult.code)}>
                         Copy Code
                       </button>
-                      <button
-                        className="btn btn-ghost btn-sm"
-                        onClick={() => setInviteResult(null)}
-                      >
+                      <button className="btn btn-ghost btn-sm" onClick={() => setInviteResult(null)}>
                         New Code
                       </button>
                     </div>
@@ -263,11 +274,7 @@ const OnboardingPage: React.FC = () => {
                     )}
                   </div>
                 ) : (
-                  <button
-                    className="btn btn-primary"
-                    onClick={handleInvite}
-                    disabled={loadingInvite}
-                  >
+                  <button className="btn btn-primary" onClick={handleCreateInvite} disabled={loadingInvite}>
                     {loadingInvite ? <><span className="spinner" /> Generating…</> : 'Generate Invitation Code'}
                   </button>
                 )}
@@ -276,20 +283,15 @@ const OnboardingPage: React.FC = () => {
           </div>
         )}
 
-        {/* ── Section 3: Pending Requests (sponsor) ────────────────────── */}
-        {isApproved && (
+        {/* ── OPERATOR: Pending Requests ───────────────────────────────── */}
+        {isOperator && (
           <div>
             <div className="section-label">
               Pending Onboarding Requests
               {pending.length > 0 && (
                 <span style={{
-                  marginLeft: 8,
-                  background: 'var(--color-brand)',
-                  color: 'white',
-                  borderRadius: 999,
-                  padding: '1px 7px',
-                  fontSize: 10,
-                  fontWeight: 600,
+                  marginLeft: 8, background: 'var(--color-brand)', color: 'white',
+                  borderRadius: 999, padding: '1px 7px', fontSize: 10, fontWeight: 600,
                 }}>
                   {pending.length}
                 </span>
@@ -297,7 +299,7 @@ const OnboardingPage: React.FC = () => {
             </div>
             <div className="card">
               {loadingPending ? (
-                <div className="card-body" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                <div className="card-body" style={{ display: 'flex', gap: 8 }}>
                   <span className="spinner" /> Loading…
                 </div>
               ) : pending.length === 0 ? (
@@ -307,17 +309,14 @@ const OnboardingPage: React.FC = () => {
               ) : (
                 pending.map((req) => (
                   <div key={req.id} style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    padding: '0.75rem 1rem',
-                    borderBottom: '0.5px solid var(--color-border-tertiary)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    padding: '0.75rem 1rem', borderBottom: '0.5px solid var(--color-border-tertiary)',
                   }}>
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                       <span style={{ fontSize: 13, fontWeight: 500 }}>{req.user.email}</span>
                       <span style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
-                        Requested: {new Date(req.createdAt).toLocaleString()}
-                        {req.partyIdHint && ` · Hint: ${req.partyIdHint}`}
+                        {new Date(req.createdAt).toLocaleString()}
+                        {req.partyIdHint && ` · hint: ${req.partyIdHint}`}
                       </span>
                     </div>
                     <div style={{ display: 'flex', gap: '0.5rem' }}>
@@ -331,28 +330,15 @@ const OnboardingPage: React.FC = () => {
                       <button
                         className="btn btn-ghost btn-sm"
                         onClick={() => handleReject(req.id)}
-                        disabled={actionLoading === req.id + '-reject'}
+                        disabled={actionLoading === req.id + '-r'}
                         style={{ color: 'var(--color-danger-text)' }}
                       >
-                        {actionLoading === req.id + '-reject' ? <span className="spinner" /> : 'Reject'}
+                        {actionLoading === req.id + '-r' ? <span className="spinner" /> : 'Reject'}
                       </button>
                     </div>
                   </div>
                 ))
               )}
-            </div>
-          </div>
-        )}
-
-        {/* ── Not approved yet ─────────────────────────────────────────── */}
-        {!isApproved && !loadingStatus && (
-          <div className="card">
-            <div className="card-body" style={{ textAlign: 'center', color: 'var(--color-text-secondary)', padding: '2rem' }}>
-              <div style={{ fontSize: 24, marginBottom: '0.5rem' }}>⏳</div>
-              <div style={{ fontWeight: 500, marginBottom: '0.25rem' }}>Waiting for sponsor approval</div>
-              <div style={{ fontSize: 12 }}>
-                Your sponsor needs to approve your onboarding request before you can invite others.
-              </div>
             </div>
           </div>
         )}
