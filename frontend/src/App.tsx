@@ -4,6 +4,9 @@ import { AuthProvider, useAuth } from './context/AuthContext';
 import Dashboard from './pages/Dashboard';
 import AuthPage from './pages/AuthPage';
 import OnboardingPage from './pages/OnboardingPage';
+import SwapPage from './pages/SwapPage';
+import NetworkPage from './pages/NetworkPage';
+import HistoryPage from './pages/HistoryPage';
 import logo from './assets/logo.png';
 import './styles/layout.css';
 
@@ -158,9 +161,9 @@ function AppShell() {
     switch (activePage) {
       case 'dashboard':  return <Dashboard />;
       case 'onboarding': return <OnboardingPage />;
-      case 'swap':       return <PlaceholderPage title="CC Swap" />;
-      case 'network':    return <PlaceholderPage title="Network Info" />;
-      case 'history':    return <PlaceholderPage title="History" />;
+      case 'swap':       return <SwapPage />;
+      case 'network':    return <NetworkPage />;
+      case 'history':    return <HistoryPage />;
     }
   };
 

@@ -9,5 +9,6 @@ const controller = new SwapController(service);
 const router     = Router();
 
 router.post('/execute', authenticate, controller.execute);
+router.get('/history',  authenticate, controller.history);
 
 export default router;
