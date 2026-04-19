@@ -133,26 +133,6 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, onNavigate }) => {
   );
 };
 
-/* ── Placeholder pages ───────────────────────────────────────────────────── */
-const PlaceholderPage: React.FC<{ title: string }> = ({ title }) => (
-  <>
-    <div className="main-header">
-      <div className="main-header-left">
-        <span className="main-header-title">{title}</span>
-      </div>
-    </div>
-    <div className="main-body">
-      <div className="card">
-        <div className="card-body" style={{ textAlign: 'center', color: 'var(--color-text-secondary)', padding: '3rem 2rem' }}>
-          <div style={{ fontSize: 32, marginBottom: '0.5rem' }}>🚧</div>
-          <div style={{ fontWeight: 500, marginBottom: '0.25rem' }}>{title}</div>
-          <div style={{ fontSize: 12 }}>This section is coming soon.</div>
-        </div>
-      </div>
-    </div>
-  </>
-);
-
 /* ── App Shell (authenticated) ───────────────────────────────────────────── */
 function AppShell() {
   const [activePage, setActivePage] = useState<NavPage>('dashboard');
