@@ -3,6 +3,7 @@ import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Dashboard from './pages/Dashboard';
 import AuthPage from './pages/AuthPage';
+import OnboardingPage from './pages/OnboardingPage';
 import logo from './assets/logo.png';
 import './styles/layout.css';
 
@@ -71,7 +72,9 @@ const Sidebar: React.FC<SidebarProps> = ({ activePage, onNavigate }) => {
   const initials = user?.email?.slice(0, 2).toUpperCase() ?? '??';
   const shortParty = user?.partyId
     ? user.partyId.replace('party-', 'p-').slice(0, 14) + '…'
-    : '';
+    : user?.onboardingStatus === 'pending' ? 'pending approval…'
+    : user?.onboardingStatus === 'rejected' ? 'rejected'
+    : 'no party assigned';
 
   return (
     <aside className="sidebar">
@@ -151,7 +154,7 @@ function AppShell() {
   const renderPage = () => {
     switch (activePage) {
       case 'dashboard':  return <Dashboard />;
-      case 'onboarding': return <PlaceholderPage title="Onboarding" />;
+      case 'onboarding': return <OnboardingPage />;
       case 'swap':       return <PlaceholderPage title="CC Swap" />;
       case 'network':    return <PlaceholderPage title="Network Info" />;
       case 'history':    return <PlaceholderPage title="History" />;

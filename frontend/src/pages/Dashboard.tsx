@@ -64,9 +64,14 @@ const Dashboard: React.FC = () => {
         <div className="main-header-left">
           <span className="main-header-title">Dashboard</span>
           <span className="network-badge">{network}</span>
-          {user && (
+          {user && user.partyId && (
             <span style={{ fontSize: 11, color: 'var(--color-text-secondary)', fontFamily: 'var(--font-mono)' }}>
               {user.partyId.slice(0, 18)}…
+            </span>
+          )}
+          {user && !user.partyId && (
+            <span style={{ fontSize: 11, color: 'var(--color-text-secondary)' }}>
+              ⏳ Awaiting party assignment
             </span>
           )}
         </div>
@@ -101,6 +106,30 @@ const Dashboard: React.FC = () => {
 
       {/* ── Body ───────────────────────────────────────────────────────── */}
       <div className="main-body">
+
+        {/* Onboarding pending banner */}
+        {user?.onboardingStatus === 'pending' && (
+          <div className="alert info" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span>⏳</span>
+            <div>
+              <div className="alert-title">Onboarding Pending</div>
+              <div style={{ fontSize: 12 }}>
+                Your Canton Party is being set up. Ask your sponsor to approve your request at{' '}
+                <strong>Dashboard → Onboarding → Pending Requests</strong>.
+              </div>
+            </div>
+          </div>
+        )}
+
+        {user?.onboardingStatus === 'rejected' && (
+          <div className="alert danger" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <span>✗</span>
+            <div>
+              <div className="alert-title">Onboarding Rejected</div>
+              <div style={{ fontSize: 12 }}>Your onboarding request was rejected. Contact your sponsor for a new invitation.</div>
+            </div>
+          </div>
+        )}
         {/* Metrics */}
         <MetricsBar validators={validators} loading={loading} />
 
