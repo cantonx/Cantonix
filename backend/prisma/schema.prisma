@@ -1,0 +1,112 @@
+// ─── Prisma Schema — Cantonix Validator Hub ───────────────────────────────
+//
+// Canton alignment notes:
+//   User.partyId  → simulates a Canton Party ID ("party-<uuid>")
+//                   Future: replace with real party from POST /v2/parties
+//   Validator     → represents a Participant Node health snapshot
+//                   Scoped per user — strict multi-tenant isolation
+//   SwapTransaction → records CC transfer initiations
+//                   transactionId maps to Canton ledger updateId or tracking_id
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────
+
+enum ValidatorStatus {
+  healthy
+  degraded
+  offline
+}
+
+enum ValidatorRole {
+  validator
+  super_validator
+}
+
+enum SwapStatus {
+  pending_approval
+  completed
+  failed
+}
+
+// ─── User ─────────────────────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String
+  /// Simulated Canton Party ID — format: "party-<uuid>"
+  /// Future: real Canton party ID from JSON Ledger API
+  partyId      String   @unique
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  validators       Validator[]
+  swapTransactions SwapTransaction[]
+
+  @@map("users")
+}
+
+// ─── Validator (Participant Node snapshot) ────────────────────────────────
+
+model Validator {
+  id     String @id @default(uuid())
+  userId String
+
+  /// Display name, e.g. "App User Participant"
+  name   String
+  /// Canton role: validator | super_validator
+  role   ValidatorRole @default(validator)
+
+  status  ValidatorStatus @default(offline)
+  version String          @default("unknown")
+  uptime  String          @default("0%")
+  /// Round-trip latency string, e.g. "120ms" — null when offline
+  latency String?
+
+  lastChecked DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  /// CC (Amulet) rewards — null when offline or unavailable
+  amuletRewards        Float?
+  synchronizerConnected Boolean @default(false)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // Fast per-user lookups — enforces multi-tenant isolation at DB level
+  @@index([userId])
+  @@map("validators")
+}
+
+// ─── SwapTransaction ──────────────────────────────────────────────────────
+
+model SwapTransaction {
+  id     String @id @default(uuid())
+  userId String
+
+  /// Canton ledger updateId or transfer offer tracking_id
+  transactionId String
+  status        SwapStatus @default(pending_approval)
+
+  fromToken  String
+  toToken    String
+  fromAmount Float
+  toAmount   Float
+
+  /// Canton party ID or wallet address used as sender
+  walletAddress String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("swap_transactions")
+}

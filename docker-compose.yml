@@ -1,0 +1,88 @@
+version: '3.8'
+
+services:
+  # ─── PostgreSQL ───────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: cantonix
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - VITE_NETWORK=${NETWORK}
+    command: npm run dev -- --host 0.0.0.0
+
+  backend:
+    build: ./backend
+    ports:
+      - "3001:3001"
+    volumes:
+      - ./backend:/app
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - PORT=3001
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/cantonix?schema=public
+
+      # Network
+      - NETWORK=${NETWORK}
+      - AUTH_MODE=${AUTH_MODE}
+
+      # Keycloak (OAuth2)
+      - KEYCLOAK_URL=${KEYCLOAK_URL}
+      - KEYCLOAK_APP_USER_REALM=${KEYCLOAK_APP_USER_REALM}
+      - KEYCLOAK_APP_PROVIDER_REALM=${KEYCLOAK_APP_PROVIDER_REALM}
+      - KEYCLOAK_APP_USER_CLIENT_ID=${KEYCLOAK_APP_USER_CLIENT_ID}
+      - KEYCLOAK_APP_USER_CLIENT_SECRET=${KEYCLOAK_APP_USER_CLIENT_SECRET}
+      - KEYCLOAK_APP_PROVIDER_CLIENT_ID=${KEYCLOAK_APP_PROVIDER_CLIENT_ID}
+      - KEYCLOAK_APP_PROVIDER_CLIENT_SECRET=${KEYCLOAK_APP_PROVIDER_CLIENT_SECRET}
+
+      # Validator API (readyz — health checks, ports x903)
+      - VALIDATOR_URI=${VALIDATOR_URI}
+      - APP_USER_VALIDATOR_URL=${APP_USER_VALIDATOR_URL}
+      - APP_PROVIDER_VALIDATOR_URL=${APP_PROVIDER_VALIDATOR_URL}
+      - SUPER_VALIDATOR_URL=${SUPER_VALIDATOR_URL}
+
+      # JSON Ledger API (Daml ops, ports x975)
+      - APP_USER_JSON_API_URL=${APP_USER_JSON_API_URL}
+      - APP_PROVIDER_JSON_API_URL=${APP_PROVIDER_JSON_API_URL}
+      - SUPER_JSON_API_URL=${SUPER_JSON_API_URL}
+
+      # Supporting services
+      - SCAN_URL=${SCAN_URL}
+      - SV_UI_URL=${SV_UI_URL}
+      - PQS_URL=${PQS_URL}
+      - WALLET_URL=${WALLET_URL:-http://wallet.localhost:2000}
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+    command: npm run dev
+
+# Note: Canton LocalNet services (validators, Keycloak, wallet, scan) are
+# defined in the Splice quickstart compose files. Integrate this file with
+# your existing canton-compose.yml using `docker compose -f canton-compose.yml
+# -f docker-compose.yml up`.
+
+volumes:
+  postgres_data:
