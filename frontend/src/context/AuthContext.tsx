@@ -16,7 +16,9 @@ import { apiUrl } from '../lib/api';
 export interface AuthUser {
   id: string;
   email: string;
-  partyId: string;
+  partyId: string | null;
+  onboardingStatus: 'pending' | 'approved' | 'rejected';
+  sponsorId: string | null;
   createdAt: string;
 }
 
@@ -25,7 +27,7 @@ interface AuthContextValue {
   token: string | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  signup: (email: string, password: string) => Promise<void>;
+  signup: (email: string, password: string, invitationCode?: string) => Promise<{ message?: string }>;
   logout: () => void;
   /** fetch() wrapper that automatically adds Authorization header */
   authFetch: (input: RequestInfo, init?: RequestInit) => Promise<Response>;
@@ -73,11 +75,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── signup ───────────────────────────────────────────────────────────────
-  const signup = useCallback(async (email: string, password: string) => {
+  const signup = useCallback(async (email: string, password: string, invitationCode?: string) => {
     const res = await fetch(apiUrl('/api/auth/signup'), {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ email, password }),
+      body:    JSON.stringify({ email, password, ...(invitationCode ? { invitationCode } : {}) }),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error ?? 'Signup failed');
@@ -85,6 +87,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     localStorage.setItem(TOKEN_KEY, data.token);
     setToken(data.token);
     setUser(data.user);
+    return { message: data.message };
   }, []);
 
   // ── login ────────────────────────────────────────────────────────────────
