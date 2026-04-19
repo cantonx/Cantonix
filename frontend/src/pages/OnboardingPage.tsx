@@ -150,12 +150,6 @@ const OnboardingPage: React.FC = () => {
     setTimeout(() => setSuccessMsg(''), 3000);
   };
 
-  const statusColor = (s: string) => {
-    if (s === 'approved') return 'var(--color-success-text)';
-    if (s === 'rejected') return 'var(--color-danger-text)';
-    return 'var(--color-text-secondary)';
-  };
-
   return (
     <>
       <div className="main-header">
