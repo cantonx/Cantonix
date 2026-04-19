@@ -27,7 +27,13 @@ function createPrismaClient(): PrismaClient {
     );
   }
 
-  const adapter = new PrismaPg({ connectionString });
+  const adapter = new PrismaPg({
+    connectionString,
+    // Supabase & most cloud PostgreSQL providers require SSL
+    ssl: connectionString.includes('supabase.co') || process.env.NODE_ENV === 'production'
+      ? { rejectUnauthorized: false }
+      : undefined,
+  });
 
   return new PrismaClient({
     adapter,
