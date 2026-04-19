@@ -1,11 +1,18 @@
 /**
- * SwapPage.tsx — Full CC Swap page using design system
+ * SwapPage.tsx — Full CC Swap page with real-time price from CoinGecko
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../context/AuthContext';
+import { apiUrl } from '../lib/api';
 
-const RATE = 0.10;
 const NETWORK_FEE = 0.75;
+
+interface CCPrice {
+  usd: number;
+  usd_24h_change: number;
+  lastUpdated: string;
+  source: 'live' | 'cached' | 'fallback';
+}
 
 interface SwapHistoryItem {
   id: string;
@@ -34,6 +41,8 @@ const statusLabel = (s: string) => {
 const SwapPage: React.FC = () => {
   const { authFetch, user } = useAuth();
 
+  const [price, setPrice]           = useState<CCPrice | null>(null);
+  const [priceLoading, setPriceLoading] = useState(true);
   const [fromAmount, setFromAmount] = useState('');
   const [toAmount, setToAmount]     = useState('');
   const [walletAddress, setWalletAddress] = useState('');
@@ -43,6 +52,16 @@ const SwapPage: React.FC = () => {
 
   const [history, setHistory]       = useState<SwapHistoryItem[]>([]);
   const [histLoading, setHistLoading] = useState(true);
+
+  // Fetch real CC price from CoinGecko (via backend)
+  const fetchPrice = useCallback(async () => {
+    setPriceLoading(true);
+    try {
+      const res = await fetch(apiUrl('/api/price/cc'));
+      if (res.ok) setPrice(await res.json());
+    } catch { /* ignore */ }
+    setPriceLoading(false);
+  }, []);
 
   const fetchHistory = useCallback(async () => {
     setHistLoading(true);
@@ -54,22 +73,27 @@ const SwapPage: React.FC = () => {
   }, [authFetch]);
 
   useEffect(() => {
+    fetchPrice();
     fetchHistory();
-    // Pre-fill wallet address from partyId
     if (user?.partyId) setWalletAddress(user.partyId);
-  }, [fetchHistory, user?.partyId]);
+    // Refresh price every 60s
+    const interval = setInterval(fetchPrice, 60_000);
+    return () => clearInterval(interval);
+  }, [fetchPrice, fetchHistory, user?.partyId]);
+
+  const rate = price?.usd ?? 0.145;
 
   const handleFromChange = (val: string) => {
     setFromAmount(val);
     const n = parseFloat(val);
-    setToAmount(!isNaN(n) && n > 0 ? (n * RATE).toFixed(4) : '');
+    setToAmount(!isNaN(n) && n > 0 ? (n * rate).toFixed(4) : '');
     setSuccessTxId(''); setErrorMsg('');
   };
 
   const handleToChange = (val: string) => {
     setToAmount(val);
     const n = parseFloat(val);
-    setFromAmount(!isNaN(n) && n > 0 ? (n / RATE).toFixed(4) : '');
+    setFromAmount(!isNaN(n) && n > 0 ? (n / rate).toFixed(4) : '');
     setSuccessTxId(''); setErrorMsg('');
   };
 
@@ -82,7 +106,7 @@ const SwapPage: React.FC = () => {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          fromToken: 'CC', toToken: 'aUSD',
+          fromToken: 'CC', toToken: 'USD',
           fromAmount: parseFloat(fromAmount),
           toAmount:   parseFloat(toAmount),
           walletAddress: walletAddress.trim(),
@@ -146,7 +170,7 @@ const SwapPage: React.FC = () => {
                   <input type="number" className="swap-amount-input" placeholder="0"
                     value={toAmount} onChange={(e) => handleToChange(e.target.value)}
                     min="0" disabled={loading} />
-                  <span className="token-badge">aUSD</span>
+                  <span className="token-badge">USD</span>
                 </div>
               </div>
 
@@ -164,8 +188,26 @@ const SwapPage: React.FC = () => {
               <div className="swap-rate-rows">
                 <div className="swap-rate-row">
                   <span className="swap-rate-key">Rate</span>
-                  <span className="swap-rate-value">1 CC = {RATE} aUSD</span>
+                  <span className="swap-rate-value">
+                    {priceLoading ? '…' : `1 CC = $${rate.toFixed(4)} USD`}
+                    {price?.source === 'live' && (
+                      <span style={{ fontSize: 10, color: 'var(--color-success-text)', marginLeft: 4 }}>● live</span>
+                    )}
+                    {price?.source === 'fallback' && (
+                      <span style={{ fontSize: 10, color: 'var(--color-text-secondary)', marginLeft: 4 }}>est.</span>
+                    )}
+                  </span>
                 </div>
+                {price && (
+                  <div className="swap-rate-row">
+                    <span className="swap-rate-key">24h change</span>
+                    <span className="swap-rate-value" style={{
+                      color: price.usd_24h_change >= 0 ? 'var(--color-success-text)' : 'var(--color-danger-text)',
+                    }}>
+                      {price.usd_24h_change >= 0 ? '+' : ''}{price.usd_24h_change.toFixed(2)}%
+                    </span>
+                  </div>
+                )}
                 <div className="swap-rate-row">
                   <span className="swap-rate-key">Network fee</span>
                   <span className="swap-rate-value">~{NETWORK_FEE} CC</span>
@@ -205,17 +247,24 @@ const SwapPage: React.FC = () => {
           {/* ── Info panel ────────────────────────────────────────────── */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
             <div className="card">
-              <div className="card-header"><span className="card-title">About CC Swap</span></div>
+              <div className="card-header"><span className="card-title">CC Market Data</span></div>
               <div className="card-body" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
                 {[
+                  ['Price (USD)', priceLoading ? '…' : `$${rate.toFixed(4)}`],
+                  ['24h Change', priceLoading ? '…' : `${price?.usd_24h_change?.toFixed(2) ?? '0'}%`],
                   ['Token', 'Canton Coin (CC / Amulet)'],
-                  ['Target', 'aUSD (application USD)'],
+                  ['Target', 'USD (via swap)'],
                   ['Settlement', 'Canton Ledger (Daml DVP)'],
-                  ['Mode', 'Transfer Offer → Approval'],
+                  ['Source', 'CoinGecko'],
                 ].map(([k, v]) => (
-                  <div key={k} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                  <div key={k as string} style={{ display: 'flex', justifyContent: 'space-between' }}>
                     <span style={{ fontSize: 12, color: 'var(--color-text-secondary)' }}>{k}</span>
-                    <span style={{ fontSize: 12, fontWeight: 500 }}>{v}</span>
+                    <span style={{
+                      fontSize: 12, fontWeight: 500,
+                      color: k === '24h Change'
+                        ? (parseFloat(v as string) >= 0 ? 'var(--color-success-text)' : 'var(--color-danger-text)')
+                        : 'var(--color-text-primary)',
+                    }}>{v}</span>
                   </div>
                 ))}
               </div>

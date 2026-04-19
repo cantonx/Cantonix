@@ -11,6 +11,7 @@ import meRoutes           from './routes/me';
 import onboardingRoutes   from './routes/onboarding';
 import participantRoutes  from './routes/participant';
 import invitationRoutes   from './routes/invitations';
+import priceRoutes        from './routes/price';
 
 const app = express();
 
@@ -41,8 +42,9 @@ app.use('/api/invitations', invitationRoutes);  // ADMIN/OPERATOR: create/list/r
 app.use('/api/participant',  participantRoutes); // Participant Node status [auth]
 app.use('/api/validators',  validatorRoutes);   // status / onboard  [auth]
 app.use('/api/network',     networkRoutes);     // status  [auth]
-app.use('/api/swap',        swapRoutes);        // execute  [auth]
+app.use('/api/swap',        swapRoutes);        // execute / history  [auth]
 app.use('/api/ledger',      ledgerRoutes);      // Canton JSON Ledger API proxy
+app.use('/api/price',       priceRoutes);       // CC price feed (public)
 
 // ─── Root ─────────────────────────────────────────────────────────────────
 app.get('/', (_req, res) => {
