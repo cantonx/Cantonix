@@ -7,7 +7,7 @@
  * ALL queries filter by userId — strict multi-tenant isolation.
  */
 
-import { SwapStatus as PrismaSwapStatus } from '@prisma/client';
+import { SwapStatus as PrismaSwapStatus, SwapTransaction } from '@prisma/client';
 import { prisma } from '../lib/prisma';
 import { randomUUID } from 'crypto';
 import type { ISwapProvider } from '../interfaces/ISwapProvider';
@@ -62,7 +62,7 @@ export class SwapService {
       take:    limit,
     });
 
-    return rows.map((row) => ({
+    return rows.map((row: SwapTransaction) => ({
       transactionId: row.transactionId,
       status:        row.status as SwapResult['status'],
       fromAmount:    row.fromAmount,
