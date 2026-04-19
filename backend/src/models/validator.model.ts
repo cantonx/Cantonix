@@ -94,6 +94,24 @@ export interface ParticipantNode {
    * Populated when PROVIDER=canton.
    */
   synchronizerConnected?: boolean;
+
+  /**
+   * Canton Participant Node ID (from Admin API).
+   * Future: populated via GET /v0/admin/participant/id
+   */
+  participantId?: string;
+
+  /**
+   * Global Synchronizer domain ID this node is connected to.
+   * Future: populated via GET /v0/admin/participant/global-domain-connection-config
+   */
+  domainId?: string;
+
+  /**
+   * Human-readable synchronizer connectivity status.
+   * Values: "connected" | "degraded" | "disconnected"
+   */
+  synchronizerStatus?: string;
 }
 
 // ─── Legacy alias — keeps existing API response shape unchanged ───────────

@@ -1,18 +1,24 @@
 /**
  * ValidatorService.ts
  *
- * Multi-tenant validator monitoring — backed by PostgreSQL via Prisma.
+ * Multi-tenant Participant Node monitoring — backed by PostgreSQL via Prisma.
  *
- * Strategy:
- *   1. On first request for a user → seed 3 default Participant Node rows.
- *   2. On every GET /api/validators/status → fetch fresh simulated data
- *      from the provider, persist the updated snapshot to DB, return it.
- *   3. ALL queries filter by userId — strict multi-tenant isolation.
+ * ─── Canton Alignment ─────────────────────────────────────────────────────
  *
- * Canton alignment:
- *   When PROVIDER=canton, replace provider.getValidatorsStatus() with
- *   real HTTP calls to each node's /api/validator/readyz endpoint.
- *   The DB schema and service interface stay identical.
+ * "Validator" in this service refers to the Validator App running on a
+ * Canton Participant Node — not a generic blockchain validator.
+ *
+ * Each row in the `validators` table represents a snapshot of one
+ * Participant Node's health, scoped to a specific user (multi-tenant).
+ *
+ * New fields (v4.0):
+ *   participantId      → Canton Participant Node ID (from Admin API)
+ *   domainId           → Global Synchronizer domain ID
+ *   synchronizerStatus → Derived connectivity status string
+ *
+ * Provider abstraction:
+ *   PROVIDER=mock   → MockValidatorProvider (simulated data)
+ *   PROVIDER=canton → CantonValidatorProvider (real HTTP calls)
  */
 
 import { ValidatorStatus as PrismaStatus, ValidatorRole } from '@prisma/client';
@@ -42,6 +48,20 @@ function apiStatusToPrisma(status: Validator['status']): PrismaStatus {
   return status as PrismaStatus;
 }
 
+/**
+ * Derive a human-readable synchronizer status string from node health.
+ * Real Canton: replace with actual synchronizer connection config check.
+ */
+function deriveSynchronizerStatus(
+  status: Validator['status'],
+  synchronizerConnected: boolean
+): string {
+  if (!synchronizerConnected) return 'disconnected';
+  if (status === 'healthy')   return 'connected';
+  if (status === 'degraded')  return 'degraded';
+  return 'disconnected';
+}
+
 function dbRowToValidator(row: {
   name: string;
   role: ValidatorRole;
@@ -52,17 +72,24 @@ function dbRowToValidator(row: {
   lastChecked: Date;
   amuletRewards: number | null;
   synchronizerConnected: boolean;
+  participantId: string | null;
+  domainId: string | null;
+  synchronizerStatus: string | null;
 }): Validator {
   return {
-    name:                 row.name,
-    role:                 prismaRoleToApi(row.role),
-    status:               row.status as Validator['status'],
-    version:              row.version,
-    uptime:               row.uptime,
-    latency:              row.latency,
-    lastChecked:          row.lastChecked.toISOString(),
-    amuletRewards:        row.amuletRewards,
+    name:                  row.name,
+    role:                  prismaRoleToApi(row.role),
+    status:                row.status as Validator['status'],
+    version:               row.version,
+    uptime:                row.uptime,
+    latency:               row.latency,
+    lastChecked:           row.lastChecked.toISOString(),
+    amuletRewards:         row.amuletRewards,
     synchronizerConnected: row.synchronizerConnected,
+    // New Canton-aligned fields
+    participantId:         row.participantId ?? undefined,
+    domainId:              row.domainId ?? undefined,
+    synchronizerStatus:    row.synchronizerStatus ?? undefined,
   };
 }
 
@@ -72,29 +99,26 @@ export class ValidatorService {
   constructor(private readonly provider: IValidatorProvider) {}
 
   /**
-   * Return fresh validator statuses for the authenticated user.
+   * Return fresh Participant Node statuses for the authenticated user.
    * Seeds 3 default rows on first call. Persists updated snapshot to DB.
    */
   async getAllStatuses(user: JwtPayload): Promise<Validator[]> {
-    // Seed default validators if this user has none yet
     const count = await prisma.validator.count({ where: { userId: user.sub } });
     if (count === 0) {
       await this.seedDefaultValidators(user.sub);
     }
 
-    // Fetch fresh simulated (or real) data from the provider
+    // Fetch fresh data from provider (mock or real Canton)
     const fresh = await this.provider.getValidatorsStatus();
 
-    // Persist the snapshot — upsert by (userId, name) to avoid duplicates
+    // Persist snapshot — upsert by row ID
     await Promise.all(
-      fresh.map(async (v) =>
-        prisma.validator.upsert({
-          where: {
-            // Prisma requires a unique constraint for upsert.
-            // We use a compound unique on (userId, name) — see schema @@unique below.
-            // For now we find-then-update to avoid schema change mid-migration.
-            id: await this.getOrCreateId(user.sub, v.name, v.role),
-          },
+      fresh.map(async (v) => {
+        const id = await this.getOrCreateId(user.sub, v.name, v.role);
+        const syncStatus = deriveSynchronizerStatus(v.status, v.synchronizerConnected ?? false);
+
+        return prisma.validator.upsert({
+          where: { id },
           update: {
             status:               apiStatusToPrisma(v.status),
             version:              v.version,
@@ -103,6 +127,10 @@ export class ValidatorService {
             lastChecked:          new Date(),
             amuletRewards:        v.amuletRewards,
             synchronizerConnected: v.synchronizerConnected ?? false,
+            // Canton-aligned fields
+            participantId:        v.participantId ?? null,
+            domainId:             v.domainId ?? null,
+            synchronizerStatus:   syncStatus,
           },
           create: {
             userId:               user.sub,
@@ -117,12 +145,14 @@ export class ValidatorService {
             lastChecked:          new Date(),
             amuletRewards:        v.amuletRewards,
             synchronizerConnected: v.synchronizerConnected ?? false,
+            participantId:        v.participantId ?? null,
+            domainId:             v.domainId ?? null,
+            synchronizerStatus:   syncStatus,
           },
-        })
-      )
+        });
+      })
     );
 
-    // Return the freshly persisted rows (ordered consistently)
     const rows = await prisma.validator.findMany({
       where:   { userId: user.sub },
       orderBy: { name: 'asc' },
@@ -131,9 +161,6 @@ export class ValidatorService {
     return rows.map(dbRowToValidator);
   }
 
-  /**
-   * Return aggregate network status derived from the user's validators.
-   */
   async getNetworkStatus(user: JwtPayload): Promise<NetworkStatusResult> {
     const validators = await this.getAllStatuses(user);
     return aggregateNetworkStatus(validators, config.networkName);
@@ -153,19 +180,17 @@ export class ValidatorService {
     });
   }
 
-  /** Find existing validator row ID, or return a placeholder for upsert create path */
   private async getOrCreateId(
     userId: string,
     name: string,
     role: Validator['role']
   ): Promise<string> {
     const existing = await prisma.validator.findFirst({
-      where: { userId, name },
+      where:  { userId, name },
       select: { id: true },
     });
     if (existing) return existing.id;
 
-    // Row doesn't exist yet — create it now and return the new id
     const created = await prisma.validator.create({
       data: {
         userId,
